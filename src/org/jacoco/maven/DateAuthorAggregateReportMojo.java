@@ -21,9 +21,11 @@ import com.github.javaparser.ast.comments.JavadocComment;
 import com.github.javaparser.javadoc.JavadocBlockTag;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.time.DateUtils;
+import org.apache.maven.artifact.Artifact;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
+import org.apache.maven.project.MavenProject;
 import org.jacoco.report.IReportGroupVisitor;
 
 import java.io.File;
@@ -42,7 +44,10 @@ import static java.util.stream.Collectors.*;
  * @since 2021/06/10
  */
 @Mojo(name = "date-author-aggregate-report", defaultPhase = LifecyclePhase.VERIFY, threadSafe = true)
-public class DateAuthorAggregateReportMojo extends ReportMojo {
+public class DateAuthorAggregateReportMojo extends ReportAggregateMojo {
+	private static final String JAVA_FILE_SUFFIX = ".java";
+	private static final String CLASS_FILE_SUFFIX = ".class";
+
 	private static final DateFormat yyyyMMdd = new SimpleDateFormat("yyyyMMdd");
 
 	/**
@@ -75,9 +80,18 @@ public class DateAuthorAggregateReportMojo extends ReportMojo {
 	@Parameter
 	private String baselineDate;
 
+	/**
+	 * 是否聚合多个项目
+	 */
+	@Parameter(defaultValue = "false")
+	private boolean aggregateProjects;
+
 	public DateAuthorAggregateReportMojo() {
 	}
 
+	/**
+	 * 块注释中的tag信息
+	 */
 	private static class CommentTags {
 		private final String date;
 		private final String author;
@@ -88,6 +102,9 @@ public class DateAuthorAggregateReportMojo extends ReportMojo {
 		}
 	}
 
+	/**
+	 * Class文件信息
+	 */
 	private static class ClassFile {
 		private final String yearMonth;
 		private final String author;
@@ -97,6 +114,18 @@ public class DateAuthorAggregateReportMojo extends ReportMojo {
 			this.yearMonth = yearMonth;
 			this.author = author;
 			this.file = file;
+		}
+
+		public String getYearMonth() {
+			return yearMonth;
+		}
+
+		public String getAuthor() {
+			return author;
+		}
+
+		public File getFile() {
+			return file;
 		}
 	}
 
@@ -142,8 +171,8 @@ public class DateAuthorAggregateReportMojo extends ReportMojo {
 				}
 			}
 			if (StringUtils.isEmpty(date) || StringUtils.isEmpty(author)) {
-				getLog().warn(String.format("Java source file missing @%s or @%s tags: %s", dateTagName, authorTagName,
-						file.getPath()));
+				getLog().warn(String.format("Java source file missing @%s or @%s tags: %s", dateTagName,
+						authorTagName, file.getPath()));
 			}
 			return new CommentTags(date, author);
 		} catch (FileNotFoundException e) {
@@ -152,14 +181,17 @@ public class DateAuthorAggregateReportMojo extends ReportMojo {
 		}
 	}
 
-	private Map<String, Map<String, List<File>>> getClassFileGroupingByDateAndAuthor() throws IOException {
+	/**
+	 * 按照日期和作者聚合Class文件
+	 */
+	private Map<String, Map<String, List<File>>> aggregateProjectClassFiles(MavenProject project) throws IOException {
 		FileFilter filter = new FileFilter(includes, excludes);
 		String sourceDirectory = project.getBuild().getSourceDirectory();
 		String outputDirectory = project.getBuild().getOutputDirectory();
 		String baselineDate = reformatDate(this.baselineDate);
 		Map<String, Map<String, List<File>>> classFileMap = filter.getFiles(new File(sourceDirectory))
 				.parallelStream()
-				.filter(file -> file.getPath().endsWith(".java"))
+				.filter(file -> file.getPath().endsWith(JAVA_FILE_SUFFIX))
 				.map(javaFile -> {
 					CommentTags commentTags = getJavaFileCommentTags(javaFile);
 					if (StringUtils.isEmpty(commentTags.date) || StringUtils.isEmpty(commentTags.author)) {
@@ -174,15 +206,18 @@ public class DateAuthorAggregateReportMojo extends ReportMojo {
 					// 替换文件路径前缀
 					String pathname = outputDirectory + StringUtils.removeStart(javaFile.getPath(), sourceDirectory);
 					// 将后缀名.java替换成.class
-					String classFilePathname = StringUtils.removeEnd(pathname, ".java") + ".class";
+					String classFilePathname = StringUtils.removeEnd(pathname, JAVA_FILE_SUFFIX) + CLASS_FILE_SUFFIX;
 					getLog().info("Found class file: " + classFilePathname);
 					return new ClassFile(yearMonth, commentTags.author, new File(classFilePathname));
 				})
 				.filter(Objects::nonNull)
 				.collect(
 					groupingBy(
-						classFile -> classFile.yearMonth,
-						groupingBy(classFile -> classFile.author, mapping(classFile -> classFile.file, toList()))
+						ClassFile::getYearMonth,
+						groupingBy(
+							ClassFile::getAuthor,
+							mapping(ClassFile::getFile, toList())
+						)
 					)
 				);
 		Set<String> authors = classFileMap.values().stream().map(Map::keySet).flatMap(Set::stream).collect(toSet());
@@ -190,24 +225,41 @@ public class DateAuthorAggregateReportMojo extends ReportMojo {
 		return classFileMap;
 	}
 
+	private List<MavenProject> findDependencies() {
+		return findDependencies(Artifact.SCOPE_COMPILE, Artifact.SCOPE_RUNTIME, Artifact.SCOPE_PROVIDED);
+	}
+
 	@Override
 	void createReport(IReportGroupVisitor visitor, ReportSupport support) throws IOException {
+		getLog().info("Start generating date author aggregate coverage report");
 		long start = System.currentTimeMillis();
-		IReportGroupVisitor group = visitor.visitGroup(project.getArtifactId());
-		Map<String, Map<String, List<File>>> classFileMap = getClassFileGroupingByDateAndAuthor();
-		for (Entry<String, Map<String, List<File>>> outerEntry : classFileMap.entrySet()) {
-			String date = outerEntry.getKey();
+		IReportGroupVisitor group = visitor.visitGroup(title);
+		// 打包方式为pom时，默认聚合多个项目
+		if (aggregateProjects || project.getPackaging().equalsIgnoreCase("pom")) {
+			for (MavenProject dependency : findDependencies()) {
+				createReport(group.visitGroup(dependency.getArtifactId()), dependency, support);
+			}
+		} else {
+			createReport(group, project, support);
+		}
+		double seconds = (System.currentTimeMillis() - start) / 1000.0;
+		getLog().info("------------------------------------------------------------------------");
+		getLog().info(String.format("Generate date author aggregate coverage report in %.3f s", seconds));
+		getLog().info("------------------------------------------------------------------------");
+	}
+
+	private void createReport(IReportGroupVisitor group, MavenProject project, ReportSupport support)
+			throws IOException {
+		Map<String, Map<String, List<File>>> aggregatedClassFiles = aggregateProjectClassFiles(project);
+		for (Entry<String, Map<String, List<File>>> outerEntry : aggregatedClassFiles.entrySet()) {
+			String yearMonth = outerEntry.getKey();
 			Map<String, List<File>> authorFiles = outerEntry.getValue();
-			IReportGroupVisitor childGroup = group.visitGroup(date);
+			IReportGroupVisitor childGroup = group.visitGroup(yearMonth);
 			for (Entry<String, List<File>> innerEntry : authorFiles.entrySet()) {
 				String author = innerEntry.getKey();
 				List<File> files = innerEntry.getValue();
 				support.processProject(childGroup, author, project, files, sourceEncoding);
 			}
 		}
-		double seconds = (System.currentTimeMillis() - start) / 1000.0;
-		getLog().info("------------------------------------------------------------------------");
-		getLog().info(String.format("Generate coverage report in %.3f s", seconds));
-		getLog().info("------------------------------------------------------------------------");
 	}
 }

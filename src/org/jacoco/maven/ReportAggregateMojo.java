@@ -12,13 +12,6 @@
  *******************************************************************************/
 package org.jacoco.maven;
 
-import java.io.File;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Locale;
-
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.versioning.DefaultArtifactVersion;
 import org.apache.maven.artifact.versioning.InvalidVersionSpecificationException;
@@ -28,6 +21,13 @@ import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
 import org.apache.maven.project.MavenProject;
 import org.jacoco.report.IReportGroupVisitor;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Locale;
 
 /**
  * <p>
@@ -161,8 +161,14 @@ public class ReportAggregateMojo extends AbstractReportMojo {
 		return "JaCoCo Aggregate";
 	}
 
-	private List<MavenProject> findDependencies(final String... scopes) {
-		final List<MavenProject> result = new ArrayList<MavenProject>();
+	/**
+	 * Change to package default access modifier.
+	 *
+	 * @author czt
+	 * @since 2021-06-11
+	 */
+	List<MavenProject> findDependencies(final String... scopes) {
+		final List<MavenProject> result = new ArrayList<>();
 		final List<String> scopeList = Arrays.asList(scopes);
 		for (final Object dependencyObject : project.getDependencies()) {
 			final Dependency dependency = (Dependency) dependencyObject;
