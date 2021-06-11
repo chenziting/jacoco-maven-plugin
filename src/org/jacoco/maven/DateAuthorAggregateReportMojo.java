@@ -189,7 +189,7 @@ public class DateAuthorAggregateReportMojo extends ReportAggregateMojo {
 		String sourceDirectory = project.getBuild().getSourceDirectory();
 		String outputDirectory = project.getBuild().getOutputDirectory();
 		String baselineDate = reformatDate(this.baselineDate);
-		Map<String, Map<String, List<File>>> classFileMap = filter.getFiles(new File(sourceDirectory))
+		Map<String, Map<String, List<File>>> aggregatedClassFiles = filter.getFiles(new File(sourceDirectory))
 				.parallelStream()
 				.filter(file -> file.getPath().endsWith(JAVA_FILE_SUFFIX))
 				.map(javaFile -> {
@@ -220,9 +220,10 @@ public class DateAuthorAggregateReportMojo extends ReportAggregateMojo {
 						)
 					)
 				);
-		Set<String> authors = classFileMap.values().stream().map(Map::keySet).flatMap(Set::stream).collect(toSet());
+		Set<String> authors = aggregatedClassFiles.values().stream().map(Map::keySet).flatMap(Set::stream)
+				.collect(toSet());
 		getLog().info("Java source file authors: " + authors);
-		return classFileMap;
+		return aggregatedClassFiles;
 	}
 
 	private List<MavenProject> findDependencies() {
