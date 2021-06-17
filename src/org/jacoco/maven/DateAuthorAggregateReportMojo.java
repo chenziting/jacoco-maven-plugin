@@ -73,7 +73,7 @@ public class DateAuthorAggregateReportMojo extends ReportAggregateMojo {
 	/**
 	 * 作者姓名分隔符，默认为斜杠'/'或者空格' '
 	 */
-	@Parameter(defaultValue = "/", required = true)
+	@Parameter(defaultValue = "/, ", required = true)
 	private String[] authorDelimiters;
 
 	/**
